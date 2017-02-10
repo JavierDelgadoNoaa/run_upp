@@ -15,6 +15,7 @@ TODO :
 - Commented out part that skips existing files (since it is not robust enough)
 : Database is only updated in simultaneous_mode 
 - regrid_output (to latlon) runs on the frontend (only takes like 3 minutes max)
+- debug_mode still deletes the temp dir
 NOTES
 - Changes in params.conf between runs with the same "database" can cause problems.
   e.g. if you change process_fields_individually, since that will cause the
@@ -153,7 +154,7 @@ class NMMBInputSource(InputSource):
                #       the same convention here, although there seems to be less missing points for those.
                 #ret = [float(toks[i]) for i in (2,4,3,5)]
                 #ret = [float(toks[i]) for i in (1,7,2,8)]
-                ret = [float(toks[i]) for i in (0,6,1,7)]
+                ret = [float(toks[i]) for i in (0,6,5,7)]
                 #ret[0] /= 10**6. ; ret[1] /= 10**6. ; ret[2] /= 10**5. ; ret[3] /= 10**5.
                 ret[0] /= 10**6. ; ret[1] /= 10**6. ; ret[2] /= 10**6. ; ret[3] /= 10**6.
         elif os.path.exists(self.domain_details_file(domainNum)):
@@ -257,6 +258,7 @@ _logger=None
 
 def _parse_args():
     global g_debug_mode
+    #import pdb ;pdb.set_trace()
     usage="usage: %prog [options] <database file> <config file1 [config_file2 ...]> "\
           "[config_fileN ... config_fileN+M] [input_file1,...input_fileN]"\
           "".format() + __doc__
@@ -271,7 +273,6 @@ def _parse_args():
     parser.add_option("-l", "--log-level", dest="log_level", default=logging.INFO,
                       help="(0-100 or constant defined in the logging module")
     (options, args) = parser.parse_args()
-    
     if len(args) < 2:
         print usage
         sys.exit(1)
@@ -724,7 +725,7 @@ def ____cat_file(src, dest):
         shutil.move(src, dest)
     os.unlink(lock_file)
 
-def regrid_output(insrc, infile, outfile, domain, fieldset=None, separate_files=False):
+def regrid_output(insrc, infile, outfile, domain, fieldset=None, separate_files=False, conf=None):
     """ Regrid the given grib file to latlon """
     #wgrib2 in.grb -new_grid latlon -135.738:5000:.027 -21.64:2500:.027 jza.grb
     # wgrib2 nmbprs_HGT_2006091000.f000.grb2 -new_grid latlon 224.2:5000:.027 -21.64:2500:.027  jza.grb2
@@ -733,17 +734,25 @@ def regrid_output(insrc, infile, outfile, domain, fieldset=None, separate_files=
     #(nx,ny) = [str(x) for x in insrc.gridsize(domainNum=domain)]
     ##new
     grid_extents = [int(x) for x in insrc.extents(domainNum=domain)]
-    log.warn("Grid extents: {0}".format(grid_extents))
-    print "grid_extents: ", grid_extents 
-    ##grid_extents[0] -= 10
-    ##grid_extents[2] -= 10
-    log.warn("Grid extents: {0}".format(grid_extents))
-    print "grid_extents: ", grid_extents 
-    (nx,ny) = [str(x+1000) for x in insrc.gridsize(domainNum=domain)]
+    #log.warn("Grid extents: {0}".format(grid_extents))
+    #print "grid_extents: ", grid_extents 
+    #grid_extents[0] -= 10
+    #grid_extents[2] -= 20
+    #log.warn("Grid extents: {0}".format(grid_extents))
+    #print "grid_extents: ", grid_extents 
+    (nx,ny) = insrc.gridsize(domainNum=domain)
+    if conf:
+        try:
+            nxmult = float(conf.get("domain", "nx_multiplication"))
+            nymult = float(conf.get("domain", "ny_multiplication"))
+            nx = int(nxmult * nx)
+            ny = int(nymult * ny)
+        except : # NoOptionError
+            pass
     ##
-    (dx,dy) = [str(x) for x in insrc.resolution(domainNum=domain)] 
-    latstr = "{0}:{1}:{2}".format(grid_extents[0], ny, dy)
-    lonstr = "{0}:{1}:{2}".format(grid_extents[2], nx, dx)
+    (dx,dy) = insrc.resolution(domainNum=domain)
+    latstr = "{0}:{1}:{2}".format(grid_extents[0], str(ny), str(dy))
+    lonstr = "{0}:{1}:{2}".format(grid_extents[2], str(nx), str(dx))
     # NOTE: Setting -new_grid_winds to 'grid' to mirror the Table 7 value of 136 used in 
     # copygb
     # hack:  nmmb specific ##replace -multifield- with the pname in case there are multiple 
@@ -872,7 +881,7 @@ def run_upp(fieldset, insrc, domain, init_date, fcst_offset, templateDir, conf,
                 separate_files = True
             else:
                 separate_files = False
-            regrid_output(insrc, unipost_outfile, latlon_outfile, domain, fieldset, separate_files)
+            regrid_output(insrc, unipost_outfile, latlon_outfile, domain, fieldset, separate_files, conf)
             log.debug("regrid complete")
             # hack: Change outfile for separate files case
             if  "-multifield-" in outfile:
