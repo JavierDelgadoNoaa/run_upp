@@ -62,14 +62,15 @@ FIELD_DATATYPE = "fltng_pnt"
 COMPRESSION = "lossless"
 OUTPUT_FORMAT = "grib2" # no support for grib1, at least for now
 JOB_POLL_INTERVAL = 30
-template_dir = os.path.join(os.getcwd(), "upp_template_dir")
+upp_version = "3.1"
+template_dir = os.path.join(os.getcwd(), "upp_template_dir", upp_version)
 # TODO : This should be in config
 #UPP_HOME = "/home/Javier.Delgado/apps/upp/dtc/3.1/vanilla" # FAILING
-UPP_HOME = "/home/Javier.Delgado/apps/upp/dtc/3.0/2014/nr"
+UPP_HOME = "/home/Javier.Delgado/apps/upp/dtc/" + upp_version + "/nr"
 WGRIB2_EXE = "/apps/wgrib2/0.1.9.5.1/bin/wgrib2"
 KEEP_TEMP_DIRECTORY = True # TODO - have debug option
 INTERPOLATE_TO_LATLON = True
-MAX_JOBS = 40 # setting too high may be waht causes random failures
+MAX_JOBS = 25 # setting too high may be waht causes random failures
 db_file = 'succeeded_fieldsets.pickle'
 
 class InputSource(object):
@@ -123,7 +124,10 @@ class NMMBInputSource(InputSource):
         fhr = int(fcstOffset.total_seconds() / 3600)
         fmin = int(fcstOffset.total_seconds() % 3600 / 60)
         #return "NMBPRS{fhr:2d}.tm00"
-        return "NMBPRS.GrbF{fhr:02d}".format(fhr=fhr, fmin=fmin)
+        if fmin == 0: 
+            return "NMBPRS.GrbF{fhr:02d}".format(fhr=fhr, fmin=fmin)
+        else: 
+            return "NMBPRS.GrbF{fhr:02d}.{fmin:02d}".format(fhr=fhr, fmin=fmin)
     
     def domain_details_file(self, domainNum):
         # TODO : can't we use configure_file instead?
@@ -143,6 +147,8 @@ class NMMBInputSource(InputSource):
         #NE lat,lon:   35.270   -76.987
 
         if os.path.exists("latlons_corners.txt"):
+            #     -18088     -100328     -18088      -19672      49000     -129665      49000     -350335
+
             log.debug("Using latlon_corners.txt to get grid extents")
             with open("latlons_corners.txt") as f:
                 toks = f.readlines()[0].split()
@@ -156,7 +162,10 @@ class NMMBInputSource(InputSource):
                 #ret = [float(toks[i]) for i in (1,7,2,8)]
                 ret = [float(toks[i]) for i in (0,6,5,7)]
                 #ret[0] /= 10**6. ; ret[1] /= 10**6. ; ret[2] /= 10**5. ; ret[3] /= 10**5.
-                ret[0] /= 10**6. ; ret[1] /= 10**6. ; ret[2] /= 10**6. ; ret[3] /= 10**6.
+                # UPDATE : Did this change for version 3.1 or is something else happening?
+                #     TODO : Check if it's version dependent (i.e. e6 vs e3)
+                #ret[0] /= 10**6. ; ret[1] /= 10**6. ; ret[2] /= 10**6. ; ret[3] /= 10**6.   <-- was working for 3.0
+                ret[0] /= 10**3. ; ret[1] /= 10**3. ; ret[2] /= 10**3. ; ret[3] /= 10**3.
         elif os.path.exists(self.domain_details_file(domainNum)):
             with open(self.domain_details_file(domainNum)) as f:
                 lines = f.readlines()
@@ -179,8 +188,10 @@ class NMMBInputSource(InputSource):
             dx = float(dat[8])
             dy = float(dat[9])
             # unipost puts value in millidegress for grib2
-            dx /= 1.e6
-            dy /= 1.e6
+            #dx /= 1.e6 # UPDATE : for 3.1? TODO
+            dx /= 1.e3
+            #dy /= 1.e6 # UPDATE : For 3.1? TODO
+            dy /= 1.e3
             # since it's LCC, dx is multiplied by 107 and dy 110
             dx /= 107.
             dy /= 110.
@@ -265,13 +276,16 @@ def _parse_args():
     parser = OptionParser(usage=usage)
     #parser.add_option("-f", "--file", dest="input_file", optional=False)
     #parser.add_option("-c", "--config", dest="config_file")
-    parser.add_option("-d", "--debug_mode", dest="g_debug_mode", 
+    parser.add_option("-d", "--debug_mode", dest="debug_mode", 
                       action="store_true", default=False,
                       help="Enables debug mode - Retains all temporary "\
                            "directories and sets loggin to DEBUG (overridable "\
                            "with --log-level)")
     parser.add_option("-l", "--log-level", dest="log_level", default=logging.INFO,
                       help="(0-100 or constant defined in the logging module")
+    parser.add_option("-o", "--conf-override", dest="conf_overrides",
+                      action="append", 
+                      help="Override config setting (section.item=value)")
     (options, args) = parser.parse_args()
     if len(args) < 2:
         print usage
@@ -287,7 +301,8 @@ def _parse_args():
                 print("WARN :: Specified config file '{0}' does not exist".format(cf))
                 #log.warn("Specified config file '{0}' does not exist".format(cf))
 
-    if g_debug_mode:
+    if options.debug_mode:
+        g_debug_mode = True
         log_level = logging.DEBUG
 
     try:
@@ -297,7 +312,7 @@ def _parse_args():
             log_level = getattr(logging, options.log_level)
         except:
             print 'Unrecognized log level:', options.log_level, '. Not setting.'
-    return (db_file, config_files, log_level)
+    return (db_file, config_files, log_level, options.conf_overrides)
 
 def guess_model_type(modelDir):
     if os.path.exists(os.path.join(modelDir, "namelist.input")):
@@ -798,7 +813,17 @@ def regrid_output(insrc, infile, outfile, domain, fieldset=None, separate_files=
     # TODO : verify output - see code  at end of run_unipost
 
 def run_upp(fieldset, insrc, domain, init_date, fcst_offset, templateDir, conf,
-            outfile, jobname, log2file=False):
+            outfile, jobname, hack_lock, log2file=False):
+    """
+    :param fieldset: The Fieldset, which contians fields to process in this UPP run
+    :param insrc: InputSource corresponding to native fields 
+    :param conf: The ConfigParser object that drives this program
+    :param  outfile: The path to the output file: 
+            <output_dir>/<fieldset.outfile_pattern>
+            If calling from main(), output_dir is the config item [BASIC]output_dir
+            fieldset.outfile_pattern is whatever is put in the config section 
+            for the outfile
+    """            
     #import pdb ; pdb.set_trace()
     # Note: Dir contents will be printed if exception is caught
     pfx = "/home/Javier.Delgado/scratch/upp/upp_workdir_" # TODO : in config or GLOBAL
@@ -825,40 +850,51 @@ def run_upp(fieldset, insrc, domain, init_date, fcst_offset, templateDir, conf,
         templateDir = templateDir[:-1] if templateDir[-1] == "/" else templateDir
         bn = os.path.basename(templateDir)
         shutil.copytree(templateDir, os.path.join(os.getcwd(), bn))
-        os.chdir(bn)
+        os.chdir(bn) # directory we just copied files to
+        #print "jza555", os.getcwd()
         # Make the xml and txt parm file
         create_xml_parm_file(insrc, fieldset)
-        # This is not necessary until v3.1, which is currently failing (TODO : uncomment for v3.1
-        """
-        for fil in ["PostXMLPreprocessor.pl", "POST-XML-Library-NT.pl", 
-                    "post_avblflds.xml"]:
-            os.symlink(os.path.join(UPP_HOME, "parm", fil), fil)
-            # the perl script seems to go back to the original working directory
-            if os.path.islink("/home/Javier.Delgado/scripts/upp/"+fil):
-                os.unlink("/home/Javier.Delgado/scripts/upp/"+fil)
-            os.symlink(os.path.join(os.getcwd(), fil), "/home/Javier.Delgado/scripts/upp/"+fil)
-        if os.path.islink("/home/Javier.Delgado/scripts/upp/postcntrl.xml"):
-            os.unlink("/home/Javier.Delgado/scripts/upp/postcntrl.xml")
-        os.symlink(os.path.join(os.getcwd(), "postcntrl.xml"), "/home/Javier.Delgado/scripts/upp/postcntrl.xml")
+        
+        # This is not necessary until v3.1
+        hack_lock.acquire()
+        if float(upp_version) > 3.0999:
+            for fil in ["PostXMLPreprocessor.pl", "POST-XML-Library-NT.pl", 
+                        "post_avblflds.xml"]:
+                os.symlink(os.path.join(UPP_HOME, "parm", fil), fil)
+                # the perl script seems to go back to the original working directory
+                dep_file = os.path.join(g_exec_dir, fil)
+                # UPDATE - this is causing race conditions
+                if os.path.islink(dep_file):
+                    os.unlink(dep_file)
+                os.symlink(os.path.join(os.getcwd(), fil), dep_file)
         x2t_args = ["/usr/bin/perl", "PostXMLPreprocessor.pl", "postcntrl.xml", 
                     "post_avblflds.xml", "postxconfig-NT.txt"]
+        postcntrl = os.path.join(g_exec_dir, "postcntrl.xml")
+        if os.path.islink(postcntrl):
+            os.unlink(postcntrl)
+        os.symlink(os.path.join(os.getcwd(), "postcntrl.xml"), postcntrl)
         #import pdb ; pdb.set_trace()
+        
+        # For some reason, the XML->txt converter runs in the exec dir, so 
+        # it's a critical section
+        
+        #subprocess.check_call(["echo","jza666"])
+        #subprocess.check_call(["/bin/pwd"])
         #subprocess.check_call(["/bin/ls"])
         subprocess.check_call(x2t_args) #, shell=True)  
+        shutil.copy(os.path.join(g_exec_dir,"postxconfig-NT.txt"), os.getcwd()+"/postxconfig-NT.txt")
+        hack_lock.release()
         #p = subprocess.Popen(x2t_args, cwd=os.getcwd())
-        """
+        
         # Run Unipost
         upp_exe = os.path.join(UPP_HOME, "bin", "unipost.exe")
         os.symlink(upp_exe, "unipost.exe")
         
-        # This is not necessary until v3.1, which is currently failing (TODO : uncomment for v3.1
-        #os.symlink("/home/Javier.Delgado/scripts/upp/postxconfig-NT.txt", os.getcwd()+"/postxconfig-NT.txt")
         # this is done in the above commented code, so it must be uncommented when v3.1 works
-        os.symlink(os.path.join(UPP_HOME, "parm", "post_avblflds.xml"), "post_avblflds.xml")
+        #os.symlink(os.path.join(UPP_HOME, "parm", "post_avblflds.xml"), "post_avblflds.xml")
 
         insrc.create_itag(fcst_offset, domain)
         run_unipost(insrc, fieldset, conf, fcst_offset, jobname)
-        # TODO ? Do we need to cat the unipost output or just the interpolated output ?
         unipost_outfile = insrc.unipost_outfile_name(fcst_offset)
         #outfile = fieldset.get_outfile(conversion_args)
         #if not os.path.exists(os.path.dirname(outfile)):
@@ -870,6 +906,7 @@ def run_upp(fieldset, insrc, domain, init_date, fcst_offset, templateDir, conf,
         if INTERPOLATE_TO_LATLON:
             # ASSUME : data is staggered (True for NMB/NMM) TODO : Handle ARW
             latlon_outfile = unipost_outfile.lower()
+            print "jza88888 latlon_outfile = ", latlon_outfile
             #(base,ext) = os.path.splitext(unipost_outfile)
             #staggered_outfile = base + ".nativeHorz" + ext
             #os.move(fieldset.outfile, staggered_outfile)
@@ -904,8 +941,17 @@ def run_upp(fieldset, insrc, domain, init_date, fcst_offset, templateDir, conf,
                     cat_file(ll_outnow, outnow)
             else:
                 cat_file(latlon_outfile, outfile)
-        else:
-            cat_file(unipost_outfile, outfile)
+
+        # Retain the native domain output - will all go in one file
+        if conf.has_option("BASIC", "unipost_output_path"):
+            native_outfile = conf.get("BASIC", "unipost_output_path")
+            if native_outfile: # not blank
+                fhr = int(fcst_offset.total_seconds() / 3600)
+                fmin = int(fcst_offset.total_seconds() % 3600 / 60)
+                native_outfile = native_outfile.format(init_date=init_date, fhr=fhr, fmin=fmin)
+                log.debug("Combining unipost outfile contents...{0}->{1}"
+                          .format(unipost_outfile, native_outfile))
+                cat_file(unipost_outfile, native_outfile)
 
 def  _get_key(fieldset, domain, init_date, fcst_offset, outfile):
     return "::".join([`fieldset`, str(domain), `init_date`, str(fcst_offset), 
@@ -915,15 +961,25 @@ def  _get_key(fieldset, domain, init_date, fcst_offset, outfile):
 # MAIN
 #
 if __name__ == "__main__":
+    hack_lock = mp.Lock()
     g_debug_mode  = False
+    g_exec_dir = os.getcwd()
     #import pdb ; pdb.set_trace()
-    (db_file, config_files, log_level) = _parse_args()
+    (db_file, config_files, log_level, conf_overrides) = _parse_args()
     log = _default_log(log_level)
     conf = ConfigParser()
     #conf.readfp(open("params.conf"))
     conf.read(config_files)
     confbasic = lambda x: conf.get("BASIC", x)
-    
+    # Override any config options set in cmdline
+    for opt in conf_overrides:
+        try:
+            lhs,value = opt.split("=") 
+            sec,item = lhs.split(".")
+        except ValueError:
+            raise Exception("Override option should be in format: section.item=value")
+        conf.set(sec, item, value)
+
     # Set the succeeded_tasks list, which contains a list of tasks that
     # were verified as successful. A task in this case is an execution
     # of unipost.exe and wgrib for a given fieldset, domain,  
@@ -942,7 +998,7 @@ if __name__ == "__main__":
     domains = [int(x) for x in confbasic("domains").split(",")]
     duration_secs = int(duration.total_seconds())
     interval_secs =  int(interval.total_seconds())
-    first_fhr = int(confbasic("first_fhr"))
+    first_fhr = float(confbasic("first_fhr"))
 
     output_dir = confbasic("output_dir").replace("/", os.sep)
     #create_template_dir() # TODO - reduce chance of issues w/ future UPP ver.
@@ -1013,7 +1069,7 @@ if __name__ == "__main__":
                 #jobname +=  '_'.join(fieldset.pnames)  ; not specific enuf
                 jobname +=  '_'.join(fieldset.shortnames) 
                 args = [fieldset, insrc, domain, init_date, fcst_offset,
-                        template_dir, conf, outfile, jobname]
+                        template_dir, conf, outfile, jobname, hack_lock]
                 
                 key = _get_key(fieldset, domain, init_date, fcst_offset, outfile)
                 #import pdb ; pdb.set_trace()

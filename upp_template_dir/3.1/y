@@ -1,0 +1,5 @@
+total 1408
+lrwxrwxrwx 1 Javier.Delgado aoml-osse  90 Nov  2 00:57 hires_micro_lookup.dat -> /home/Javier.Delgado/apps/wrf/2014/osse/2014m_a/osse/WRFV3/run/ETAMPNEW_DATA.expanded_rain
+-rw-r--r-- 1 Javier.Delgado aoml-osse 267 Nov  8 17:00 job.zsh
+lrwxrwxrwx 1 Javier.Delgado aoml-osse  76 Nov  2 00:57 nam_micro_lookup.dat -> /home/Javier.Delgado/apps/wrf/2014/osse/2014m_a/osse/WRFV3/run/ETAMPNEW_DATA
+lrwxrwxrwx 1 Javier.Delgado aoml-osse  86 Nov  2 00:57 params_grib2_tbl_new -> /home/Javier.Delgado/apps/upp/dtc/3.0/2014/vanilla/src/lib/g2tmpl/params_grib2_tbl_new
