@@ -63,14 +63,14 @@ COMPRESSION = "lossless"
 OUTPUT_FORMAT = "grib2" # no support for grib1, at least for now
 JOB_POLL_INTERVAL = 30
 upp_version = "3.1"
-template_dir = os.path.join(os.getcwd(), "upp_template_dir", upp_version)
+template_dir = os.path.join("/home/Javier.Delgado/scripts/run_upp/stable", "upp_template_dir", upp_version)
 # TODO : This should be in config
 #UPP_HOME = "/home/Javier.Delgado/apps/upp/dtc/3.1/vanilla" # FAILING
 UPP_HOME = "/home/Javier.Delgado/apps/upp/dtc/" + upp_version + "/nr"
 WGRIB2_EXE = "/apps/wgrib2/0.1.9.5.1/bin/wgrib2"
 KEEP_TEMP_DIRECTORY = True # TODO - have debug option
 INTERPOLATE_TO_LATLON = True
-MAX_JOBS = 25 # setting too high may be waht causes random failures
+MAX_JOBS = 140 # setting too high may be waht causes random failures
 db_file = 'succeeded_fieldsets.pickle'
 
 class InputSource(object):
@@ -127,7 +127,9 @@ class NMMBInputSource(InputSource):
         if fmin == 0: 
             return "NMBPRS.GrbF{fhr:02d}".format(fhr=fhr, fmin=fmin)
         else: 
-            return "NMBPRS.GrbF{fhr:02d}.{fmin:02d}".format(fhr=fhr, fmin=fmin)
+            # For my modified version of unipost.exe, which puts the 3-digit fhr
+            #return "NMBPRS.GrbF{fhr:02d}.{fmin:02d}".format(fhr=fhr, fmin=fmin)
+            return "NMBPRS.GrbF{fhr:03d}.{fmin:02d}".format(fhr=fhr, fmin=fmin)
     
     def domain_details_file(self, domainNum):
         # TODO : can't we use configure_file instead?
@@ -312,7 +314,8 @@ def _parse_args():
             log_level = getattr(logging, options.log_level)
         except:
             print 'Unrecognized log level:', options.log_level, '. Not setting.'
-    return (db_file, config_files, log_level, options.conf_overrides)
+    conf_overrides = options.conf_overrides if options.conf_overrides else []
+    return (db_file, config_files, log_level, conf_overrides)
 
 def guess_model_type(modelDir):
     if os.path.exists(os.path.join(modelDir, "namelist.input")):
@@ -797,6 +800,8 @@ def regrid_output(insrc, infile, outfile, domain, fieldset=None, separate_files=
             # Now separate UGRD and VGRD
             #import pdb ; pdb.set_trace()
             if pname == "UGRD|VGRD":
+                # NOTE : U and V grids must be adjacent and U must be before V 
+                # for new_grid to work!
                 for fld in ["UGRD","VGRD"]:
                     log.debug("Subsetting 'winds' to UGRD and VGRD")
                     outnow_fld = outnow.replace("winds", fld)
