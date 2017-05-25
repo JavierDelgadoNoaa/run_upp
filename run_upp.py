@@ -70,7 +70,7 @@ UPP_HOME = "/home/Javier.Delgado/apps/upp/dtc/" + upp_version + "/nr"
 WGRIB2_EXE = "/apps/wgrib2/0.1.9.5.1/bin/wgrib2"
 KEEP_TEMP_DIRECTORY = True # TODO - have debug option
 INTERPOLATE_TO_LATLON = True
-MAX_JOBS = 140 # setting too high may be waht causes random failures
+MAX_JOBS = 60 # setting too high may be waht causes random failures
 db_file = 'succeeded_fieldsets.pickle'
 
 class InputSource(object):
